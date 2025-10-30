@@ -1,0 +1,365 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import authService from '../../../services/authService';
+import folderService from '../../../services/folderService';
+import PDFViewer from '../PDFViewer/PDFViewer';
+import './DownloadReport.css';
+
+const DownloadReportComponent = () => {
+    const navigate = useNavigate();
+    const [searchQuery, setSearchQuery] = useState('');
+    const [filterCategory, setFilterCategory] = useState('all');
+    const [selectedFile, setSelectedFile] = useState(null);
+    const [showFavorites, setShowFavorites] = useState(false);
+    const [selectedReports, setSelectedReports] = useState([]);
+    const [reports, setReports] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [domains, setDomains] = useState([]);
+    const [error, setError] = useState(null);
+
+    // Get current user from auth service
+    const currentUser = authService.getCurrentUser() || {
+        name: 'Guest User',
+        email: 'guest@example.com',
+        role: 'GUEST'
+    };
+
+    // Fetch user's accessible files
+    useEffect(() => {
+        const fetchUserFiles = async () => {
+            try {
+                setLoading(true);
+                setError(null);
+                
+                // Get files from folder service
+                const response = await folderService.getUserAccessibleFiles(currentUser.email);
+                
+                // Transform files to reports format
+                const transformedReports = response.data.map((file, index) => ({
+                    id: file.id || `file-${index}`,
+                    title: file.name || 'Untitled Document',
+                    description: file.description || `File from ${file.folder || 'unknown'} folder`,
+                    domain: file.folder || 'General',
+                    publishedDate: file.modified ? new Date(file.modified).toLocaleDateString() : 'N/A',
+                    version: file.version || '1.0',
+                    favorite: false,
+                    size: file.size || '0 KB',
+                    fileName: file.name,
+                    folderPath: file.folder || 'General',
+                    fileUrl: file.url || '#'
+                }));
+
+                setReports(transformedReports);
+                
+                // Extract unique domains
+                const uniqueDomains = [...new Set(transformedReports.map(r => r.domain))].sort();
+                setDomains(uniqueDomains);
+                
+            } catch (err) {
+                console.error('Error loading files:', err);
+                setError('Failed to load files. Please try again later.');
+                setReports([]);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchUserFiles();
+    }, [currentUser.email]);
+
+    // Filter reports based on search and filters
+    const filteredReports = reports.filter(r => {
+        const matchesSearch = r.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                            r.domain.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesDomain = filterCategory === 'all' || r.domain === filterCategory;
+        const matchesFavorites = !showFavorites || r.favorite;
+        return matchesSearch && matchesDomain && matchesFavorites;
+    });
+
+    // Handle file download
+    const handleDownload = async (report) => {
+        try {
+            // Get the download URL from the server
+            const response = await folderService.getFileDownloadUrl({
+                folder: report.folderPath,
+                fileName: report.fileName
+            });
+            
+            // Create a temporary link and trigger download
+            const link = document.createElement('a');
+            link.href = response.downloadUrl;
+            link.download = report.fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+        } catch (err) {
+            console.error('Download failed:', err);
+            alert('Failed to download file. Please try again.');
+        }
+    };
+
+    // Toggle favorite status
+    const toggleFavorite = (id) => {
+        setReports(reports.map(r => 
+            r.id === id ? { ...r, favorite: !r.favorite } : r
+        ));
+    };
+
+    // Handle report selection
+    const handleSelectReport = (id) => {
+        setSelectedReports(prev => 
+            prev.includes(id) 
+                ? prev.filter(reportId => reportId !== id) 
+                : [...prev, id]
+        );
+    };
+
+    // Select/Deselect all reports
+    const handleSelectAll = () => {
+        if (selectedReports.length === filteredReports.length) {
+            setSelectedReports([]);
+        } else {
+            setSelectedReports(filteredReports.map(r => r.id));
+        }
+    };
+
+    // Download all selected reports
+    const handleDownloadSelected = async () => {
+        for (const id of selectedReports) {
+            const report = reports.find(r => r.id === id);
+            if (report) {
+                await handleDownload(report);
+            }
+        }
+        setSelectedReports([]);
+    };
+
+    if (selectedFile) {
+        return <PDFViewer fileName={selectedFile} onBack={() => setSelectedFile(null)} />;
+    }
+
+    return (
+        <div className="download-report-container">
+            {/* Header Section */}
+            <div className="hero-section mb-5">
+                <div className="d-flex align-items-center mb-3">
+                    <div className="hero-icon me-3">
+                        <i className="bi bi-file-earmark-arrow-down"></i>
+                    </div>
+                    <div>
+                        <h1 className="hero-title mb-2">Download Reports</h1>
+                        <p className="hero-subtitle mb-0">
+                            Access and download your reports from approved domains
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            {/* Search and Filter */}
+            <div className="search-filter-section card shadow-sm mb-4">
+                <div className="card-body">
+                    <div className="row g-3 align-items-center">
+                        <div className="col-md-5">
+                            <div className="search-wrapper">
+                                <i className="bi bi-search search-icon"></i>
+                                <input 
+                                    type="text" 
+                                    className="form-control search-input" 
+                                    placeholder="Search reports..." 
+                                    value={searchQuery} 
+                                    onChange={(e) => setSearchQuery(e.target.value)} 
+                                />
+                            </div>
+                        </div>
+                        <div className="col-md-5">
+                            <select 
+                                className="form-select filter-select" 
+                                value={filterCategory} 
+                                onChange={(e) => setFilterCategory(e.target.value)}
+                            >
+                                <option value="all">All Domains</option>
+                                {domains.map(domain => (
+                                    <option key={domain} value={domain}>{domain}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="col-md-2">
+                            <button
+                                className={`btn w-100 ${showFavorites ? 'btn-warning' : 'btn-outline-warning'}`}
+                                onClick={() => setShowFavorites(!showFavorites)}
+                            >
+                                <i className={`bi bi-star${showFavorites ? '-fill' : ''} me-2`}></i>
+                                Favorites
+                                {reports.filter(r => r.favorite).length > 0 && (
+                                    <span className="badge bg-light text-dark ms-2">
+                                        {reports.filter(r => r.favorite).length}
+                                    </span>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                    
+                    {selectedReports.length > 0 && (
+                        <div className="row mt-3">
+                            <div className="col-12">
+                                <div className="d-flex justify-content-between align-items-center bg-light p-3 rounded">
+                                    <span className="text-muted">
+                                        <i className="bi bi-check-square me-2"></i>
+                                        {selectedReports.length} report(s) selected
+                                    </span>
+                                    <div className="d-flex gap-2">
+                                        <button 
+                                            className="btn btn-sm btn-outline-secondary" 
+                                            onClick={handleSelectAll}
+                                        >
+                                            {selectedReports.length === filteredReports.length ? 'Deselect All' : 'Select All'}
+                                        </button>
+                                        <button 
+                                            className="btn btn-primary" 
+                                            onClick={handleDownloadSelected}
+                                            disabled={selectedReports.length === 0}
+                                        >
+                                            <i className="bi bi-download me-2"></i>
+                                            Download Selected ({selectedReports.length})
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Error Message */}
+            {error && (
+                <div className="alert alert-danger" role="alert">
+                    <i className="bi bi-exclamation-triangle me-2"></i>
+                    {error}
+                </div>
+            )}
+
+            {/* Loading State */}
+            {loading ? (
+                <div className="text-center py-5">
+                    <div className="spinner-border text-primary" role="status">
+                        <span className="visually-hidden">Loading...</span>
+                    </div>
+                    <p className="mt-3 text-muted">Loading your reports...</p>
+                </div>
+            ) : filteredReports.length > 0 ? (
+                // Reports List
+                <div className="row g-4">
+                    {filteredReports.map(report => (
+                        <div key={report.id} className="col-12">
+                            <div className={`card report-card shadow-sm ${selectedReports.includes(report.id) ? 'border-primary' : ''}`}>
+                                <div className="card-body">
+                                    <div className="d-flex align-items-start">
+                                        <div className="form-check me-3 pt-2">
+                                            <input
+                                                className="form-check-input"
+                                                type="checkbox"
+                                                checked={selectedReports.includes(report.id)}
+                                                onChange={() => handleSelectReport(report.id)}
+                                                style={{ width: '20px', height: '20px', cursor: 'pointer' }}
+                                            />
+                                        </div>
+                                        <div className="report-icon me-3">
+                                            <i className="bi bi-file-earmark-pdf text-danger"></i>
+                                        </div>
+                                        <div className="flex-grow-1">
+                                            <div className="d-flex justify-content-between align-items-start mb-2">
+                                                <h4 className="report-card-title mb-0">
+                                                    {report.title}
+                                                    {report.favorite && (
+                                                        <span className="ms-2 text-warning">
+                                                            <i className="bi bi-star-fill"></i>
+                                                        </span>
+                                                    )}
+                                                </h4>
+                                                <div className="d-flex gap-2">
+                                                    <button
+                                                        className="btn btn-sm btn-link p-0"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            toggleFavorite(report.id);
+                                                        }}
+                                                        title={report.favorite ? "Remove from favorites" : "Add to favorites"}
+                                                    >
+                                                        <i className={`bi bi-star${report.favorite ? '-fill' : ''} fs-5`}
+                                                           style={{ color: report.favorite ? '#ffc107' : '#6c757d' }}></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            
+                                            <p className="report-description text-muted mb-3">
+                                                {report.description}
+                                            </p>
+                                            
+                                            <div className="report-meta d-flex flex-wrap gap-4 mb-3">
+                                                <span className="meta-item">
+                                                    <i className="bi bi-folder me-1"></i>
+                                                    <strong>Domain:</strong> {report.domain}
+                                                </span>
+                                                <span className="meta-item">
+                                                    <i className="bi bi-calendar3 me-1"></i>
+                                                    <strong>Published:</strong> {report.publishedDate}
+                                                </span>
+                                                <span className="meta-item">
+                                                    <i className="bi bi-tag me-1"></i>
+                                                    <strong>Version:</strong> {report.version}
+                                                </span>
+                                                <span className="meta-item">
+                                                    <i className="bi bi-file-earmark-text me-1"></i>
+                                                    <strong>Size:</strong> {report.size}
+                                                </span>
+                                            </div>
+                                            
+                                            <div className="d-flex gap-2 flex-wrap">
+                                                <button 
+                                                    className="btn btn-primary"
+                                                    onClick={() => handleDownload(report)}
+                                                >
+                                                    <i className="bi bi-download me-2"></i>Download
+                                                </button>
+                                                <button 
+                                                    className="btn btn-outline-secondary"
+                                                    onClick={() => setSelectedFile(report.fileName)}
+                                                >
+                                                    <i className="bi bi-eye me-2"></i>Preview
+                                                </button>
+                                                <a 
+                                                    href={report.fileUrl} 
+                                                    target="_blank" 
+                                                    rel="noopener noreferrer"
+                                                    className="btn btn-outline-secondary"
+                                                >
+                                                    <i className="bi bi-box-arrow-up-right me-2"></i>Open
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                // No Results
+                <div className="no-results card shadow-sm">
+                    <div className="card-body text-center py-5">
+                        <i className="bi bi-inbox no-results-icon"></i>
+                        <h5 className="mt-3 mb-2">No Reports Found</h5>
+                        <p className="text-muted mb-0">
+                            {searchQuery || filterCategory !== 'all' || showFavorites
+                                ? 'Try adjusting your search or filter criteria'
+                                : 'No reports are available for your account.'}
+                        </p>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default DownloadReportComponent;
